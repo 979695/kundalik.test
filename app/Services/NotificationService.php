@@ -5,7 +5,6 @@ namespace App\Services;
 use App\Models\Task;
 use App\Models\User;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\Log;
 
 class NotificationService
 {
@@ -16,46 +15,52 @@ class NotificationService
         $this->telegram = $telegram;
     }
 
-    /**
-     * Barcha foydalanuvchilar uchun bildirishnomalarni tekshirish
-     */
     public function checkAndNotify()
     {
         $now = Carbon::now();
-        
-        // 5 daqiqa ichida bajarilishi kerak bo'lgan tasklarni topish
-        $tasks = Task::where('status', 'pending')
-            ->where('scheduled_at', '<=', $now->copy()->addMinutes(5))
-            ->where(function($query) use ($now) {
-                $query->whereNull('last_notified_at')
-                      ->orWhere('last_notified_at', '<', $now->copy()->subMinutes(10));
-            })
+
+        // 1. Taskdan 10 daqiqa oldin eslatma
+        $upcomingTasks = Task::where('status', 'pending')
+            ->where('notified_before', false)
+            ->whereBetween('scheduled_at', [$now->copy()->addMinutes(9), $now->copy()->addMinutes(11)])
             ->get();
 
-        foreach ($tasks as $task) {
-            $user = $task->user;
-            if ($user && $user->chat_id) {
-                $diff = $task->scheduled_at->diffInMinutes($now);
-                $msg = "⏰ <b>Eslatma!</b>\n\nTask: {$task->title}\nVaqti: {$task->scheduled_at->format('H:i')}";
-                
-                if ($task->scheduled_at->isPast()) {
-                    $msg .= "\n\n⚠️ <i>Vaqti o'tib ketdi! Iltimos, bajaring yoki qayta rejalashtiring.</i>";
-                }
-
-                $this->telegram->sendMessage($user->chat_id, $msg);
-                
-                $task->update(['last_notified_at' => $now]);
-            }
+        foreach ($upcomingTasks as $task) {
+            $msg = "⏳ <b>Tayyorlaning!</b>\n10 daqiqadan so'ng quyidagi vazifa boshlanadi:\n👉 {$task->title}";
+            $this->telegram->sendMessage($task->user->chat_id, $msg);
+            $task->update(['notified_before' => true]);
         }
 
-        // Faol bo'lmagan foydalanuvchilarni tekshirish (24 soat)
-        $inactiveUsers = User::where('last_active_at', '<', $now->copy()->subDay())
-            ->whereNotNull('chat_id')
+        // 2. Task vaqti kelganda eslatma
+        $dueTasks = Task::where('status', 'pending')
+            ->where('notified_at', false)
+            ->where('scheduled_at', '<=', $now)
             ->get();
 
+        foreach ($dueTasks as $task) {
+            $keyboard = [
+                'inline_keyboard' => [
+                    [
+                        ['text' => '✅ Bajardim', 'callback_data' => 'done_' . $task->id],
+                        ['text' => '❌ Bajarolmadim', 'callback_data' => 'fail_' . $task->id]
+                    ]
+                ]
+            ];
+            $msg = "🔔 <b>VAQT BO'LDI!</b>\n👉 {$task->title}\n\nVazifani bajarib, pastdagi tugmani bosing!";
+            $this->telegram->sendMessage($task->user->chat_id, $msg, $keyboard);
+            $task->update(['notified_at' => true]);
+        }
+
+        // 3. Inactivity (dangasalik) tekshiruvi - 24 soat kirmaganlarga
+        $inactiveUsers = User::where('last_active_at', '<=', $now->copy()->subHours(24))
+                             ->where('laziness_score', '<', 100)
+                             ->get();
+                             
         foreach ($inactiveUsers as $user) {
-            $this->telegram->sendMessage($user->chat_id, "👋 Salom! Kuningiz qanday o'tyapti? Rejalaringizni yangilashni unutmang! ✨");
-            $user->update(['last_active_at' => $now]); // Qayta-qayta bezovta qilmaslik uchun
+            $msg = "😴 Qayerlarda yuribsiz? Rivojlanish to'xtab qoldiku!\nDarhol bitta vazifa qo'shib, o'zingizni qo'lga oling!";
+            $this->telegram->sendMessage($user->chat_id, $msg);
+            // Kunda 1 marta jo'natish uchun vaqtni yangilaymiz (kichik xiyla)
+            $user->update(['last_active_at' => $now->copy()->subHours(23)]);
         }
     }
 }

@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\User;
 use App\Models\BotLog;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class BotService
@@ -12,19 +11,29 @@ class BotService
     protected $telegram;
     protected $taskService;
     protected $habitService;
+    protected $gamificationService;
+    protected $islamicService;
 
     public function __construct(
         TelegramService $telegram,
         TaskService $taskService,
-        HabitService $habitService
+        HabitService $habitService,
+        GamificationService $gamificationService,
+        IslamicService $islamicService
     ) {
         $this->telegram = $telegram;
         $this->taskService = $taskService;
         $this->habitService = $habitService;
+        $this->gamificationService = $gamificationService;
+        $this->islamicService = $islamicService;
     }
 
     public function handleUpdate($update)
     {
+        if (isset($update['callback_query'])) {
+            return $this->handleCallback($update['callback_query']);
+        }
+
         if (!isset($update['message'])) return;
 
         $message = $update['message'];
@@ -33,7 +42,6 @@ class BotService
         $text = $message['text'] ?? '';
         $firstName = $message['from']['first_name'] ?? 'Do\'stim';
 
-        // Foydalanuvchini topish yoki yaratish
         $user = User::firstOrCreate(
             ['telegram_id' => $telegramId],
             [
@@ -41,54 +49,86 @@ class BotService
                 'email' => $telegramId . '@telegram.com',
                 'password' => bcrypt(Str::random(16)),
                 'chat_id' => $chatId,
-                'last_active_at' => now()
+                'last_active_at' => now(),
+                'xp' => 0,
+                'level' => 1
             ]
         );
 
         $user->update(['last_active_at' => now(), 'chat_id' => $chatId]);
 
-        // Log saqlash
-        BotLog::create([
-            'user_id' => $user->id,
-            'action' => 'message_received',
-            'details' => $text
-        ]);
+        BotLog::create(['user_id' => $user->id, 'action' => 'message', 'details' => $text]);
 
-        // Buyruqlarni qayta ishlash
         switch ($text) {
             case '/start':
                 $this->handleStart($user);
                 break;
-            case '📋 Vazifalar ro\'yxati':
+            case '📅 Rejalar':
             case '/list':
                 $this->handleListTasks($user);
                 break;
-            case '➕ Vazifa qo\'shish':
-                $this->telegram->sendMessage($chatId, "📌 Yangi vazifa qo'shish uchun quyidagi formatda yozing:\n\n<code>/add 14:00 | Vazifa nomi</code>");
+            case '➕ Qo\'shish':
+                $this->telegram->sendMessage($chatId, "📌 Yangi vazifa qo'shish:\n\n<code>/add 14:00 | Kitob o'qish</code>");
                 break;
-            case '📈 Odatlarim':
-            case '/habits':
-                $this->handleListHabits($user);
+            case '📊 Statistika':
+                $this->handleStatistics($user);
                 break;
-            case '🤖 Smart Reja (AI)':
-                $this->handleSmartSchedule($user);
+            case '🎯 Level':
+                $this->handleLevel($user);
+                break;
+            case '🕌 Namoz':
+                $this->handleIslamic($user);
                 break;
             default:
                 if (str_starts_with($text, '/add')) {
                     $this->handleAddTask($user, str_replace('/add', '', $text));
                 } else {
-                    $this->telegram->sendMessage($chatId, "👋 Salom! Menyu tugmalaridan foydalanib o'z rejalaringizni boshqarishingiz mumkin.", $this->getMainMenu());
+                    $this->telegram->sendMessage($chatId, "👋 Menyu orqali tanlang:", $this->getMainMenu());
                 }
                 break;
         }
     }
 
+    protected function handleCallback($callback)
+    {
+        $data = $callback['data'];
+        $chatId = $callback['message']['chat']['id'];
+        $user = User::where('telegram_id', $callback['from']['id'])->first();
+
+        if (!$user) return;
+
+        if (str_starts_with($data, 'done_')) {
+            $taskId = str_replace('done_', '', $data);
+            $task = $user->tasks()->find($taskId);
+            if ($task && $task->status !== 'completed') {
+                $task->update(['status' => 'completed', 'completed_at' => now()]);
+                
+                $reward = $this->gamificationService->rewardTaskCompletion($user);
+                $msg = "🎉 Barakalla! Vazifa bajarildi.\n⭐ +10 XP oldingiz!";
+                
+                if ($reward['level_up']) {
+                    $msg .= "\n\n🚀 TABRIKLAYMIZ! Siz yangi darajaga ko'tarildingiz: Level {$reward['new_level']}!";
+                }
+                
+                $this->telegram->sendMessage($chatId, $msg);
+            }
+        } elseif (str_starts_with($data, 'fail_')) {
+            $taskId = str_replace('fail_', '', $data);
+            $task = $user->tasks()->find($taskId);
+            if ($task && $task->status !== 'completed') {
+                $task->update(['status' => 'failed']);
+                
+                $punishment = $this->gamificationService->applyPunishment($user);
+                $msg = "❌ Vazifa bajarilmadi!\n\nJAZO G'ILDIRAGI aylandi 🎰\nSizning jazongiz:\n👉 <b>{$punishment}</b>";
+                
+                $this->telegram->sendMessage($chatId, $msg);
+            }
+        }
+    }
+
     protected function handleStart(User $user)
     {
-        $msg = "🌟 <b>Smart Life Assistant</b> botiga xush kelibsiz!\n\n" .
-               "Men sizga vaqtingizni unumli sarflashda yordam beraman.\n\n" .
-               "👇 Boshlash uchun menyudan foydalaning:";
-        
+        $msg = "🌟 <b>Smart Life System</b>\n\nMen sizni rivojlantirish uchun yaratilganman. Har bir qadamda sizni nazorat qilaman va rag'batlantiraman!";
         $this->telegram->sendMessage($user->chat_id, $msg, $this->getMainMenu());
     }
 
@@ -96,13 +136,10 @@ class BotService
     {
         $task = $this->taskService->addTask($user, $text);
         if ($task) {
-            $msg = "✅ <b>Vazifa saqlandi!</b>\n\n" .
-                   "📝 <b>Nomi:</b> {$task->title}\n" .
-                   "⏰ <b>Vaqti:</b> {$task->scheduled_at->format('H:i')}\n\n" .
-                   "Sizni o'z vaqtida ogohlantiraman.";
+            $msg = "✅ Vazifa saqlandi: <b>{$task->title}</b> ({$task->scheduled_at->format('H:i')})";
             $this->telegram->sendMessage($user->chat_id, $msg, $this->getMainMenu());
         } else {
-            $this->telegram->sendMessage($user->chat_id, "❌ <b>Xato!</b>\n\nFormat: <code>/add 14:30 | Kitob o'qish</code>", $this->getMainMenu());
+            $this->telegram->sendMessage($user->chat_id, "❌ Xato format: <code>/add 14:30 | Vazifa</code>", $this->getMainMenu());
         }
     }
 
@@ -110,50 +147,53 @@ class BotService
     {
         $tasks = $this->taskService->listTasks($user);
         if ($tasks->isEmpty()) {
-            $this->telegram->sendMessage($user->chat_id, "📭 Hozircha rejalashtirilgan vazifalar yo'q.", $this->getMainMenu());
+            $this->telegram->sendMessage($user->chat_id, "📭 Bugun uchun vazifalar yo'q.");
             return;
         }
 
-        $msg = "📋 <b>Bugungi vazifalaringiz:</b>\n\n";
         foreach ($tasks as $task) {
-            $msg .= "⏰ <b>{$task->scheduled_at->format('H:i')}</b> — {$task->title}\n";
+            $keyboard = [
+                'inline_keyboard' => [
+                    [
+                        ['text' => '✅ Bajardim', 'callback_data' => 'done_' . $task->id],
+                        ['text' => '❌ Bajarolmadim', 'callback_data' => 'fail_' . $task->id]
+                    ]
+                ]
+            ];
+            $msg = "⏰ <b>{$task->scheduled_at->format('H:i')}</b> — {$task->title}";
+            $this->telegram->sendMessage($user->chat_id, $msg, $keyboard);
         }
-
-        $this->telegram->sendMessage($user->chat_id, $msg, $this->getMainMenu());
     }
 
-    protected function handleSmartSchedule(User $user)
+    protected function handleStatistics(User $user)
     {
-        $this->taskService->generateSmartSchedule($user);
-        $msg = "🤖 <b>AI:</b> Siz uchun bugungi reja tuzildi. Uni vazifalar ro'yxatida ko'rishingiz mumkin.";
-        $this->telegram->sendMessage($user->chat_id, $msg, $this->getMainMenu());
+        $completed = $user->tasks()->where('status', 'completed')->whereDate('created_at', today())->count();
+        $msg = "📊 <b>Statistika:</b>\n\n✅ Bugun bajarildi: {$completed}\n🔥 Streak: {$user->streak} kun\n😴 Dangasalik: {$user->laziness_score}%";
+        $this->telegram->sendMessage($user->chat_id, $msg);
     }
 
-    protected function handleListHabits(User $user)
+    protected function handleLevel(User $user)
     {
-        $habits = $this->habitService->listHabits($user);
-        if ($habits->isEmpty()) {
-            $this->telegram->sendMessage($user->chat_id, "📊 Odatlar ro'yxati hali bo'sh.", $this->getMainMenu());
-            return;
-        }
+        $msg = "🎯 <b>Gamification:</b>\n\n⭐ Level: {$user->level}\n✨ XP: {$user->xp}/" . ($user->level * 100);
+        $this->telegram->sendMessage($user->chat_id, $msg);
+    }
 
-        $msg = "📈 <b>Sizning odatlaringiz:</b>\n\n";
-        foreach ($habits as $habit) {
-            $status = $habit->streak > 0 ? "🔥" : "🌑";
-            $msg .= "{$status} <b>{$habit->title}</b>: {$habit->streak} kun\n";
-        }
-        $this->telegram->sendMessage($user->chat_id, $msg, $this->getMainMenu());
+    protected function handleIslamic(User $user)
+    {
+        $zikr = $this->islamicService->getDailyZikr();
+        $msg = "🕌 <b>Kunlik Zikr:</b>\n\n📿 {$zikr}\n\n<i>Namoz vaqtlari avtomatik eslatiladi.</i>";
+        $this->telegram->sendMessage($user->chat_id, $msg);
     }
 
     protected function getMainMenu()
     {
         return [
             'keyboard' => [
-                [['text' => '📋 Vazifalar ro\'yxati'], ['text' => '➕ Vazifa qo\'shish']],
-                [['text' => '📈 Odatlarim'], ['text' => '🤖 Smart Reja (AI)']],
+                [['text' => '📅 Rejalar'], ['text' => '➕ Qo\'shish']],
+                [['text' => '📊 Statistika'], ['text' => '🎯 Level']],
+                [['text' => '🕌 Namoz'], ['text' => '⚙️ Sozlamalar']],
             ],
             'resize_keyboard' => true,
-            'one_time_keyboard' => false
         ];
     }
 }
