@@ -14,18 +14,22 @@ class BotService
     protected $gamificationService;
     protected $islamicService;
 
+    protected $scheduleWizard;
+
     public function __construct(
         TelegramService $telegram,
         TaskService $taskService,
         HabitService $habitService,
         GamificationService $gamificationService,
-        IslamicService $islamicService
+        IslamicService $islamicService,
+        ScheduleWizardService $scheduleWizard
     ) {
         $this->telegram = $telegram;
         $this->taskService = $taskService;
         $this->habitService = $habitService;
         $this->gamificationService = $gamificationService;
         $this->islamicService = $islamicService;
+        $this->scheduleWizard = $scheduleWizard;
     }
 
     public function handleUpdate($update)
@@ -59,6 +63,10 @@ class BotService
 
         BotLog::create(['user_id' => $user->id, 'action' => 'message', 'details' => $text]);
 
+        if ($user->bot_state && str_starts_with($user->bot_state, 'wizard_')) {
+            return $this->scheduleWizard->handleText($user, $text);
+        }
+
         switch ($text) {
             case '/start':
                 $this->handleStart($user);
@@ -68,7 +76,8 @@ class BotService
                 $this->handleListTasks($user);
                 break;
             case '➕ Qo\'shish':
-                $this->telegram->sendMessage($chatId, "📌 Yangi vazifa qo'shish:\n\n<code>/add 14:00 | Kitob o'qish</code>");
+            case '/add':
+                $this->scheduleWizard->startWizard($user);
                 break;
             case '📊 Statistika':
                 $this->handleStatistics($user);
@@ -80,11 +89,7 @@ class BotService
                 $this->handleIslamic($user);
                 break;
             default:
-                if (str_starts_with($text, '/add')) {
-                    $this->handleAddTask($user, str_replace('/add', '', $text));
-                } else {
-                    $this->telegram->sendMessage($chatId, "👋 Menyu orqali tanlang:", $this->getMainMenu());
-                }
+                $this->telegram->sendMessage($chatId, "👋 Menyu orqali tanlang:", $this->getMainMenu());
                 break;
         }
     }
@@ -96,6 +101,10 @@ class BotService
         $user = User::where('telegram_id', $callback['from']['id'])->first();
 
         if (!$user) return;
+
+        if ($user->bot_state && str_starts_with($user->bot_state, 'wizard_')) {
+            return $this->scheduleWizard->handleCallback($user, $data);
+        }
 
         if (str_starts_with($data, 'done_')) {
             $taskId = str_replace('done_', '', $data);
@@ -128,19 +137,9 @@ class BotService
 
     protected function handleStart(User $user)
     {
+        $user->update(['bot_state' => null, 'temp_data' => null]);
         $msg = "🌟 <b>Smart Life System</b>\n\nMen sizni rivojlantirish uchun yaratilganman. Har bir qadamda sizni nazorat qilaman va rag'batlantiraman!";
         $this->telegram->sendMessage($user->chat_id, $msg, $this->getMainMenu());
-    }
-
-    protected function handleAddTask(User $user, $text)
-    {
-        $task = $this->taskService->addTask($user, $text);
-        if ($task) {
-            $msg = "✅ Vazifa saqlandi: <b>{$task->title}</b> ({$task->scheduled_at->format('H:i')})";
-            $this->telegram->sendMessage($user->chat_id, $msg, $this->getMainMenu());
-        } else {
-            $this->telegram->sendMessage($user->chat_id, "❌ Xato format: <code>/add 14:30 | Vazifa</code>", $this->getMainMenu());
-        }
     }
 
     protected function handleListTasks(User $user)
