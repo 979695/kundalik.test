@@ -56,8 +56,10 @@ class NotificationService
                 ]]
             ];
 
-            // Agar foydalanuvchida budilnik rejimi yoqilgan bo'lsa
-            if ($user->alarm_mode) {
+            // Agar foydalanuvchida budilnik rejimi yoqilgan bo'lsa (default true, null bo'lsa ham true)
+            $isAlarmMode = filter_var($user->alarm_mode ?? true, FILTER_VALIDATE_BOOLEAN);
+
+            if ($isAlarmMode) {
                 // Eslatma hali yuborilmagan bo'lsa yoki oxirgi eslatmadan 5 daqiqa o'tgan bo'lsa
                 $shouldSend = !$task->notified_at || 
                               (!$task->last_notified_at || Carbon::parse($task->last_notified_at)->diffInMinutes($now) >= 5);
@@ -78,8 +80,9 @@ class NotificationService
                              . "👉 <b>{$task->title}</b>\n\n"
                              . "⚠️ <i>Ushbu eslatma siz vazifani bajarib, tasdiqlamaguningizcha har 5 daqiqada takrorlanadi va chat tepasiga qotirib qo'yiladi!</i>";
 
-                    $audioUrl = 'https://upload.wikimedia.org/wikipedia/commons/7/75/Alarm_or_siren.ogg';
-                    $response = $this->telegram->sendAudio($user->chat_id, $audioUrl, $caption, $keyboard);
+                    // .ogg fayl voice message (sendVoice) sifatida yuboriladi, bu Telegram'da juda ishonchli va autoplay bo'ladi
+                    $voiceUrl = 'https://upload.wikimedia.org/wikipedia/commons/7/75/Alarm_or_siren.ogg';
+                    $response = $this->telegram->sendVoice($user->chat_id, $voiceUrl, $caption, $keyboard);
 
                     if ($response) {
                         $body = json_decode($response->getBody()->getContents(), true);
@@ -176,7 +179,15 @@ class NotificationService
                     $msg = "{$info['emoji']} <b>{$info['name']} namozi vaqti keldi!</b>\n\n"
                          . "Allohni zikr qiling va namoz o'qing 🤲\n\n"
                          . "<i>«Aslatu xayrun minan-nawm»</i>";
-                    $this->telegram->sendMessage($user->chat_id, $msg);
+                    
+                    // A varianti: Chiroyli Azon ovozi (audio) bilan yuboriladi
+                    $azanUrl = 'https://archive.org/download/Mp3CollectionAdzan/Adzan%20Makkah.mp3';
+                    $response = $this->telegram->sendAudio($user->chat_id, $azanUrl, $msg);
+                    
+                    // Agar audio yuborishda qandaydir muammo bo'lsa, oddiy matnli xabarni yuboramiz
+                    if (!$response) {
+                        $this->telegram->sendMessage($user->chat_id, $msg);
+                    }
                 }
             }
         }

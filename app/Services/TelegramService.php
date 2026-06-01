@@ -84,6 +84,35 @@ class TelegramService
     }
 
     /**
+     * Markaziy voice (ovozli xabar) yuborish funksiyasi
+     */
+    public function sendVoice($chatId, $voice, $caption = null, $keyboard = null)
+    {
+        $params = [
+            'chat_id' => $chatId,
+            'voice' => $voice,
+            'parse_mode' => 'HTML'
+        ];
+
+        if ($caption) {
+            $params['caption'] = $caption;
+        }
+
+        if ($keyboard) {
+            $params['reply_markup'] = json_encode($keyboard);
+        }
+
+        try {
+            return $this->client->post('sendVoice', [
+                'json' => $params
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Telegram sendVoice xatosi: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Xabarni pin qilish funksiyasi
      */
     public function pinChatMessage($chatId, $messageId, $disableNotification = false)
