@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Task;
 use App\Models\User;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Log;
 
 class NotificationService
 {
@@ -20,6 +21,7 @@ class NotificationService
     public function checkAndNotify()
     {
         $now = Carbon::now();
+        Log::info('[NotificationService] checkAndNotify boshlandi. Hozirgi vaqt: ' . $now->toDateTimeString() . ' (timezone: ' . $now->timezoneName . ')');
 
         // 1. Taskdan 10 daqiqa oldin eslatma
         $upcomingTasks = Task::with('user')
@@ -45,9 +47,13 @@ class NotificationService
             ->where('scheduled_at', '<=', $now)
             ->get();
 
+        Log::info('[NotificationService] Muddati o\'tgan topshiriqlar soni: ' . $dueTasks->count() . ' ta. Hozirgi vaqt: ' . $now->toDateTimeString());
+
         foreach ($dueTasks as $task) {
             $user = $task->user;
             if (!$user || !$user->chat_id) continue;
+
+            Log::info('[NotificationService] Topshiriq tekshirilmoqda. ID=' . $task->id . ' | "' . $task->title . '" | scheduled_at=' . $task->scheduled_at . ' | notified_at=' . ($task->notified_at ? 'true' : 'false') . ' | last_notified_at=' . $task->last_notified_at);
 
             $keyboard = [
                 'inline_keyboard' => [[
@@ -82,11 +88,13 @@ class NotificationService
 
                     // .ogg fayl voice message (sendVoice) sifatida yuboriladi, bu Telegram'da juda ishonchli va autoplay bo'ladi
                     $voiceUrl = 'https://upload.wikimedia.org/wikipedia/commons/7/75/Alarm_or_siren.ogg';
+                    Log::info('[NotificationService] sendVoice yuborilmoqda. Task ID=' . $task->id . ' | chat_id=' . $user->chat_id);
                     $response = $this->telegram->sendVoice($user->chat_id, $voiceUrl, $caption, $keyboard);
 
                     if ($response) {
                         $body = json_decode($response->getBody()->getContents(), true);
                         $messageId = $body['result']['message_id'] ?? null;
+                        Log::info('[NotificationService] sendVoice natija. ok=' . ($body['ok'] ?? 'null') . ' | message_id=' . ($messageId ?? 'null'));
                         if ($messageId) {
                             $task->update([
                                 'telegram_message_id' => $messageId,
@@ -96,6 +104,8 @@ class NotificationService
                             // Chat tepasiga qotiramiz (pin)
                             $this->telegram->pinChatMessage($user->chat_id, $messageId);
                         }
+                    } else {
+                        Log::error('[NotificationService] sendVoice MUVAFFAQIYATSIZ. Task ID=' . $task->id);
                     }
                 }
             } else {
