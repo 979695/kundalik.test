@@ -7,13 +7,14 @@ use Illuminate\Database\Eloquent\Model;
 class Task extends Model
 {
     protected $fillable = [
-        'user_id', 'title', 'scheduled_at', 'status', 
+        'user_id', 'chat_id', 'title', 'task', 'scheduled_at', 'datetime', 'status', 
         'is_recurring', 'recurrence_type', 'last_notified_at',
         'notified_before', 'notified_at', 'completed_at'
     ];
 
     protected $casts = [
         'scheduled_at' => 'datetime',
+        'datetime' => 'datetime',
         'is_recurring' => 'boolean',
         'notified_before' => 'boolean',
         'notified_at' => 'boolean',

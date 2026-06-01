@@ -30,7 +30,10 @@ class TaskService
 
             return $user->tasks()->create([
                 'title' => $title,
+                'task' => $title,
                 'scheduled_at' => $scheduledAt,
+                'datetime' => $scheduledAt,
+                'chat_id' => $user->chat_id,
                 'status' => 'pending'
             ]);
         } catch (\Exception $e) {

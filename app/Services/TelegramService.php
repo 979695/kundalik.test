@@ -2,18 +2,31 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use GuzzleHttp\Client;
 
 class TelegramService
 {
     protected $token;
     protected $apiUrl;
+    protected $client;
 
     public function __construct()
     {
         $this->token = env('TELEGRAM_BOT_TOKEN');
         $this->apiUrl = "https://api.telegram.org/bot{$this->token}";
+        
+        // Persistent connection configuration
+        $this->client = new Client([
+            'base_uri' => $this->apiUrl . '/',
+            'timeout'  => 35.0,
+            'headers'  => [
+                'Connection' => 'keep-alive',
+            ],
+            'curl' => [
+                CURLOPT_TCP_KEEPALIVE => 1,
+            ],
+        ]);
     }
 
     /**
@@ -31,7 +44,14 @@ class TelegramService
             $params['reply_markup'] = json_encode($keyboard);
         }
 
-        return Http::post("{$this->apiUrl}/sendMessage", $params);
+        try {
+            return $this->client->post('sendMessage', [
+                'json' => $params
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Telegram sendMessage xatosi: " . $e->getMessage());
+            return null;
+        }
     }
 
     /**
@@ -39,11 +59,22 @@ class TelegramService
      */
     public function getUpdates($offset = 0)
     {
-        $response = Http::get("{$this->apiUrl}/getUpdates", [
-            'offset' => $offset,
-            'timeout' => 30
-        ]);
+        try {
+            $response = $this->client->get('getUpdates', [
+                'query' => [
+                    'offset' => $offset,
+                    'timeout' => 30
+                ]
+            ]);
 
-        return $response->successful() ? $response->json()['result'] : [];
+            if ($response->getStatusCode() === 200) {
+                $data = json_decode($response->getBody()->getContents(), true);
+                return $data['result'] ?? [];
+            }
+        } catch (\Exception $e) {
+            Log::error("Telegram getUpdates xatosi: " . $e->getMessage());
+        }
+
+        return [];
     }
 }
