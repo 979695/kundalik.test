@@ -81,20 +81,20 @@ class NotificationService
                         }
                     }
 
-                    // Yangi audio eslatma yuboramiz
-                    $caption = "⏰ <b>[BUDILNIK] VAZIFA VAQTI KELDI!</b>\n\n"
-                             . "👉 <b>{$task->title}</b>\n\n"
-                             . "⚠️ <i>Ushbu eslatma siz vazifani bajarib, tasdiqlamaguningizcha har 5 daqiqada takrorlanadi va chat tepasiga qotirib qo'yiladi!</i>";
+                    // Oddiy matnli xabar — budilnik kabi takrorlanuvchi va tepaga qotiriladigan
+                    $msg = "🔔⏰🔔⏰🔔⏰🔔⏰🔔⏰\n"
+                         . "<b>VAZIFA VAQTI KELDI!</b>\n\n"
+                         . "👉 <b>{$task->title}</b>\n\n"
+                         . "⚠️ <i>Siz \"Bajardim\" yoki \"Bajarolmadim\" bosmaguningizcha har 5 daqiqada eslatib boraman!</i>\n"
+                         . "🔔⏰🔔⏰🔔⏰🔔⏰🔔⏰";
 
-                    // .ogg fayl voice message (sendVoice) sifatida yuboriladi, bu Telegram'da juda ishonchli va autoplay bo'ladi
-                    $voiceUrl = 'https://upload.wikimedia.org/wikipedia/commons/7/75/Alarm_or_siren.ogg';
-                    Log::info('[NotificationService] sendVoice yuborilmoqda. Task ID=' . $task->id . ' | chat_id=' . $user->chat_id);
-                    $response = $this->telegram->sendVoice($user->chat_id, $voiceUrl, $caption, $keyboard);
+                    Log::info('[NotificationService] sendMessage yuborilmoqda. Task ID=' . $task->id . ' | chat_id=' . $user->chat_id);
+                    $response = $this->telegram->sendMessage($user->chat_id, $msg, $keyboard);
 
                     if ($response) {
                         $body = json_decode($response->getBody()->getContents(), true);
                         $messageId = $body['result']['message_id'] ?? null;
-                        Log::info('[NotificationService] sendVoice natija. ok=' . ($body['ok'] ?? 'null') . ' | message_id=' . ($messageId ?? 'null'));
+                        Log::info('[NotificationService] sendMessage natija. ok=' . ($body['ok'] ?? 'null') . ' | message_id=' . ($messageId ?? 'null'));
                         if ($messageId) {
                             $task->update([
                                 'telegram_message_id' => $messageId,
@@ -105,7 +105,7 @@ class NotificationService
                             $this->telegram->pinChatMessage($user->chat_id, $messageId);
                         }
                     } else {
-                        Log::error('[NotificationService] sendVoice MUVAFFAQIYATSIZ. Task ID=' . $task->id);
+                        Log::error('[NotificationService] sendMessage MUVAFFAQIYATSIZ. Task ID=' . $task->id);
                     }
                 }
             } else {
@@ -182,22 +182,14 @@ class NotificationService
                 }
             }
 
-            // Namoz vaqti kelganda eslatma
+            // Namoz vaqti kelganda eslatma (oddiy matnli xabar)
             if ($currentTime === $prayerTimeStr) {
                 foreach ($users as $user) {
                     if (!$user->chat_id) continue;
                     $msg = "{$info['emoji']} <b>{$info['name']} namozi vaqti keldi!</b>\n\n"
                          . "Allohni zikr qiling va namoz o'qing 🤲\n\n"
                          . "<i>«Aslatu xayrun minan-nawm»</i>";
-                    
-                    // A varianti: Chiroyli Azon ovozi (audio) bilan yuboriladi
-                    $azanUrl = 'https://archive.org/download/Mp3CollectionAdzan/Adzan%20Makkah.mp3';
-                    $response = $this->telegram->sendAudio($user->chat_id, $azanUrl, $msg);
-                    
-                    // Agar audio yuborishda qandaydir muammo bo'lsa, oddiy matnli xabarni yuboramiz
-                    if (!$response) {
-                        $this->telegram->sendMessage($user->chat_id, $msg);
-                    }
+                    $this->telegram->sendMessage($user->chat_id, $msg);
                 }
             }
         }
