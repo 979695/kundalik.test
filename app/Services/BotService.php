@@ -103,6 +103,9 @@ class BotService
             case '🕌 Namoz':
                 $this->handleIslamic($user);
                 break;
+            case '⚙️ Sozlamalar':
+                $this->handleSettings($user);
+                break;
             default:
                 $this->telegram->sendMessage($chatId, "👋 Menyu orqali tanlang:", $this->getMainMenu());
                 break;
@@ -144,6 +147,18 @@ class BotService
             return $this->handleIslamic($user);
         }
 
+        if ($data === 'settings_toggle_prayer') {
+            $user->update(['islamic_reminders' => !$user->islamic_reminders]);
+            $messageId = $callback['message']['message_id'] ?? null;
+            return $this->handleSettings($user, $messageId);
+        }
+
+        if ($data === 'settings_toggle_alarm') {
+            $user->update(['alarm_mode' => !$user->alarm_mode]);
+            $messageId = $callback['message']['message_id'] ?? null;
+            return $this->handleSettings($user, $messageId);
+        }
+
         if (str_starts_with($data, 'aitask_')) {
             $title = base64_decode(str_replace('aitask_', '', $data));
             return $this->scheduleWizard->startWizard($user, $title);
@@ -155,8 +170,18 @@ class BotService
             if ($task && $task->status !== 'completed') {
                 $task->update(['status' => 'completed', 'completed_at' => now()]);
 
+                // Budilnikni o'chirish va unpin qilish
+                if ($task->telegram_message_id) {
+                    try {
+                        $this->telegram->unpinChatMessage($chatId, $task->telegram_message_id);
+                        $this->telegram->deleteMessage($chatId, $task->telegram_message_id);
+                    } catch (\Exception $e) {
+                        // ignore errors
+                    }
+                }
+
                 $reward = $this->gamificationService->rewardTaskCompletion($user);
-                $msg    = "🎉 Barakalla! Vazifa bajarildi.\n⭐ +10 XP oldingiz!";
+                $msg    = "🎉 Barakalla! <b>\"{$task->title}\"</b> vazifasi muvaffaqiyatli bajarildi.\n⭐ +10 XP oldingiz!";
 
                 if (!empty($reward['level_up'])) {
                     $msg .= "\n\n🚀 TABRIKLAYMIZ! Siz yangi darajaga ko'tarildingiz: Level {$reward['new_level']}!";
@@ -170,8 +195,18 @@ class BotService
             if ($task && $task->status !== 'completed') {
                 $task->update(['status' => 'failed']);
 
+                // Budilnikni o'chirish va unpin qilish
+                if ($task->telegram_message_id) {
+                    try {
+                        $this->telegram->unpinChatMessage($chatId, $task->telegram_message_id);
+                        $this->telegram->deleteMessage($chatId, $task->telegram_message_id);
+                    } catch (\Exception $e) {
+                        // ignore errors
+                    }
+                }
+
                 $punishment = $this->gamificationService->applyPunishment($user);
-                $msg        = "❌ Vazifa bajarilmadi!\n\nJAZO G'ILDIRAGI aylandi 🎰\nSizning jazongiz:\n👉 <b>{$punishment}</b>";
+                $msg        = "❌ <b>\"{$task->title}\"</b> vazifasi bajarilmadi!\n\nJAZO G'ILDIRAGI aylandi 🎰\nSizning jazongiz:\n👉 <b>{$punishment}</b>";
 
                 $this->telegram->sendMessage($chatId, $msg);
             }
@@ -338,6 +373,35 @@ class BotService
         $this->telegram->sendMessage($user->chat_id, $msg, $keyboard);
     }
 
+    protected function handleSettings(User $user, $messageId = null)
+    {
+        $prayerStatus = $user->islamic_reminders ? "🕌 Namoz: ✅ Yoqilgan" : "🕌 Namoz: ❌ O'chirilgan";
+        $alarmStatus  = $user->alarm_mode ? "⏰ Budilnik: ✅ Yoqilgan" : "⏰ Budilnik: ❌ O'chirilgan";
+
+        $keyboard = [
+            'inline_keyboard' => [
+                [[
+                    'text' => $prayerStatus,
+                    'callback_data' => 'settings_toggle_prayer'
+                ]],
+                [[
+                    'text' => $alarmStatus,
+                    'callback_data' => 'settings_toggle_alarm'
+                ]]
+            ]
+        ];
+
+        $msg = "⚙️ <b>Sozlamalar bo'limi</b>\n\nBu yerda eslatmalar va bildirishnoma rejimlarini sozlashingiz mumkin:\n\n"
+             . "1. <b>Namoz vaqtlari:</b> Kunlik besh vaqt namoz eslatmalari.\n"
+             . "2. <b>Budilnik rejimi:</b> Vazifa vaqti kelganda eshitiladigan va siz vazifani bajardim yoki bajarolmadim deb belgilamaguningizcha har 5 daqiqada takrorlanuvchi qat'iy ovozli xabar! U chat tepasiga ham qotirib qo'yiladi.";
+
+        if ($messageId) {
+            $this->telegram->editMessageText($user->chat_id, $messageId, $msg, $keyboard);
+        } else {
+            $this->telegram->sendMessage($user->chat_id, $msg, $keyboard);
+        }
+    }
+
     protected function getMainMenu()
     {
         return [
@@ -345,7 +409,7 @@ class BotService
                 [['text' => '📅 Rejalar'],        ['text' => '➕ Qo\'shish']],
                 [['text' => "⌨️ Qo'lda yozish"], ['text' => '🤖 AI yordam']],
                 [['text' => '📊 Statistika'],     ['text' => '🎯 Level']],
-                [['text' => '🕌 Namoz']],
+                [['text' => '🕌 Namoz'],         ['text' => '⚙️ Sozlamalar']],
             ],
             'resize_keyboard' => true,
         ];

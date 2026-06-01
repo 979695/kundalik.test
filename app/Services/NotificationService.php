@@ -39,15 +39,15 @@ class NotificationService
             $task->update(['notified_before' => true]);
         }
 
-        // 2. Task vaqti kelganda eslatma
+        // 2. Task vaqti kelganda/o'tganda eslatma (oddiy va budilnik rejimi)
         $dueTasks = Task::with('user')
             ->where('status', 'pending')
-            ->where('notified_at', false)
             ->where('scheduled_at', '<=', $now)
             ->get();
 
         foreach ($dueTasks as $task) {
-            if (!$task->user || !$task->user->chat_id) continue;
+            $user = $task->user;
+            if (!$user || !$user->chat_id) continue;
 
             $keyboard = [
                 'inline_keyboard' => [[
@@ -55,9 +55,59 @@ class NotificationService
                     ['text' => '❌ Bajarolmadim', 'callback_data' => 'fail_' . $task->id],
                 ]]
             ];
-            $msg = "🔔 <b>VAQT BO'LDI!</b>\n👉 {$task->title}\n\nVazifani bajarib, pastdagi tugmani bosing!";
-            $this->telegram->sendMessage($task->user->chat_id, $msg, $keyboard);
-            $task->update(['notified_at' => true]);
+
+            // Agar foydalanuvchida budilnik rejimi yoqilgan bo'lsa
+            if ($user->alarm_mode) {
+                // Eslatma hali yuborilmagan bo'lsa yoki oxirgi eslatmadan 5 daqiqa o'tgan bo'lsa
+                $shouldSend = !$task->notified_at || 
+                              (!$task->last_notified_at || Carbon::parse($task->last_notified_at)->diffInMinutes($now) >= 5);
+
+                if ($shouldSend) {
+                    // Eskisini o'chiramiz (agar mavjud bo'lsa va o'chirib bo'lsa)
+                    if ($task->telegram_message_id) {
+                        try {
+                            $this->telegram->unpinChatMessage($user->chat_id, $task->telegram_message_id);
+                            $this->telegram->deleteMessage($user->chat_id, $task->telegram_message_id);
+                        } catch (\Exception $e) {
+                            // ignore errors
+                        }
+                    }
+
+                    // Yangi audio eslatma yuboramiz
+                    $caption = "⏰ <b>[BUDILNIK] VAZIFA VAQTI KELDI!</b>\n\n"
+                             . "👉 <b>{$task->title}</b>\n\n"
+                             . "⚠️ <i>Ushbu eslatma siz vazifani bajarib, tasdiqlamaguningizcha har 5 daqiqada takrorlanadi va chat tepasiga qotirib qo'yiladi!</i>";
+
+                    $audioUrl = 'https://upload.wikimedia.org/wikipedia/commons/7/75/Alarm_or_siren.ogg';
+                    $response = $this->telegram->sendAudio($user->chat_id, $audioUrl, $caption, $keyboard);
+
+                    if ($response) {
+                        $body = json_decode($response->getBody()->getContents(), true);
+                        $messageId = $body['result']['message_id'] ?? null;
+                        if ($messageId) {
+                            $task->update([
+                                'telegram_message_id' => $messageId,
+                                'notified_at' => true,
+                                'last_notified_at' => now(),
+                            ]);
+                            // Chat tepasiga qotiramiz (pin)
+                            $this->telegram->pinChatMessage($user->chat_id, $messageId);
+                        }
+                    }
+                }
+            } else {
+                // Oddiy rejim: faqat bir marta yuboriladi
+                if (!$task->notified_at) {
+                    $msg = "🔔 <b>VAQT BO'LDI!</b>\n\n👉 <b>{$task->title}</b>\n\nVazifani bajarib, pastdagi tugmani bosing!";
+                    $response = $this->telegram->sendMessage($user->chat_id, $msg, $keyboard);
+                    if ($response) {
+                        $task->update([
+                            'notified_at' => true,
+                            'last_notified_at' => now(),
+                        ]);
+                    }
+                }
+            }
         }
 
         // 3. Namoz vaqtlari eslatmasi
